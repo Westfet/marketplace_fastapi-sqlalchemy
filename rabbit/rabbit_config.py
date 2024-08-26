@@ -1,0 +1,9 @@
+RMQ_HOST = '0.0.0.0'
+RMQ_PORT = 5672
+RMQ_USER = 'guest'
+RMQ_PASS = 'guest'
+
+RABBITMQ_URL = f"amqp://{RMQ_USER}:{RMQ_PASS}@{RMQ_HOST}:{RMQ_PORT}/"
+
+
+
