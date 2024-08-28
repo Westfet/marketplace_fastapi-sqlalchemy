@@ -1,22 +1,20 @@
-import json
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from controllers.orders_controller import OrderCreate, get_order, OrderResponse
-from queries.database import get_db
-from rabbit.rabbitmq import rabbitmq
+from fastapi import APIRouter
+from controllers.orders_controller import OrderCreate, OrderResponse, rabbitmq_order_worker, get_order
+
 
 router = APIRouter()
 
 
-@router.post("/", response_model=OrderResponse)
+@router.post("/")
 async def create_order_view(order: OrderCreate):
-    # Преобразование данных в JSON и отправка в очередь
-    order_data = json.dumps(order.dict())
-    await rabbitmq.send_message('order_creating', order_data)
-
-    return {"message": "... Заказ создается..."}
+    await rabbitmq_order_worker(order)
 
 
 @router.get("/{order_id}", response_model=OrderResponse)
-async def get_order_view(order_id: int, db: Session = Depends(get_db)):
-    return await get_order(order_id, db)
+async def get_order_view(order_id: int):
+    db_order = await get_order(order_id)
+    return OrderResponse(
+        id=db_order.id,
+        user_id=db_order.user_id,
+        status=db_order.status
+    )

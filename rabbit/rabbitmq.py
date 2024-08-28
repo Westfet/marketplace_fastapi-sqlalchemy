@@ -1,14 +1,17 @@
 import aio_pika
+import logging
 from aio_pika import Message, DeliveryMode
 from typing import Callable, Optional
 from rabbit.rabbit_config import RABBITMQ_URL
+
+logger = logging.getLogger(__name__)
 
 
 class RabbitMQ:
     def __init__(self, url: str):
         self.url = url
-        self.connection = None
-        self.channel: Optional[aio_pika.Channel] = None  # Используем Optional
+        self.connection: Optional[aio_pika.RobustConnection] = None
+        self.channel: Optional[aio_pika.Channel] = None
 
     async def connect(self):
         try:
@@ -37,7 +40,6 @@ class RabbitMQ:
             ),
             routing_key=queue_name
         )
-        print(f"Sent message: {message}")
 
     async def consume_messages(self, queue_name: str, callback: Callable):
         if not self.channel:
@@ -45,8 +47,19 @@ class RabbitMQ:
         queue = await self.declare_queue(queue_name)
         async with queue.iterator() as queue_iter:
             async for message in queue_iter:
-                async with message.process():
-                    await callback(message.body.decode())
+                try:
+                    logger.info(f"Received message: {message.body.decode()}")
+                    async with message.process():
+                        await callback(message.body.decode())
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}")
+
+    async def close(self):
+        if self.connection:
+            await self.connection.close()
+            self.connection = None
+            self.channel = None
 
 
+# Экземпляр класса RabbitMQ
 rabbitmq = RabbitMQ(RABBITMQ_URL)

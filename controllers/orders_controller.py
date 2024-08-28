@@ -1,13 +1,16 @@
 import random
 import json
-from sqlalchemy.orm import Session
+import logging
+from sqlalchemy.future import select
 from models.order import Order, OrderStatus
 from pydantic import BaseModel
 from fastapi import HTTPException
-from queries.database import session_factory
 from typing import List
 from rabbit.rabbitmq import rabbitmq
 from sqlalchemy.exc import SQLAlchemyError
+from queries.database import get_db
+
+logger = logging.getLogger(__name__)
 
 
 class OrderCreate(BaseModel):
@@ -21,44 +24,48 @@ class OrderResponse(BaseModel):
     status: str
 
 
+async def rabbitmq_order_worker(order: OrderCreate):
+    order_data = json.dumps(order.dict())
+    logger.info("... Start processing order ...")
+    await rabbitmq.send_message('order_creating', order_data)
+
+
 async def create_order(message_body: str):
     order_data = json.loads(message_body)
-    with session_factory() as db:
-        new_order = Order(user_id=order_data["user_id"], status=OrderStatus.in_process)
-        db.add(new_order)
+
+    async for session in get_db():
         try:
-            db.commit()
-            db.refresh(new_order)
-            await rabbitmq.send_message('order_processing', f"Заказ {new_order.id} создан и передан на обработку!")
-        except SQLAlchemyError as e:
-            db.rollback()
-            raise e
+            new_order = Order(user_id=order_data["user_id"], status=OrderStatus.in_process)
+            session.add(new_order)
+            await session.commit()
+            await rabbitmq.send_message('order_processing', f"Order {new_order.id} created and sent for processing!")
+        except SQLAlchemyError:
+            await session.rollback()
 
 
 async def process_new_order(message_body: str):
-    print(message_body)
-    # Какая-то работа 1
-    random_number = random.randint(1, 10)
-
-    if random_number % 2 == 0:
-        await rabbitmq.send_message('order_notifications', "2")
-    else:
-        await rabbitmq.send_message('order_notifications', "1")
+    logger.info("... Check necessary details ...")
+    random_number = random.randint(1, 2)
+    await rabbitmq.send_message('order_notifications', str(random_number))
 
 
 async def notify_customer(message_body: str):
-    # Какая-то работа 2
+    logger.info("... Notify customer ...")
     answer = int(message_body)
     if answer == 2:
-        print("заказ оформлен!")
+        logger.info("Order processed successfully!")
     else:
-        print("заказ не может быть оформлен((")
+        logger.info("Order could not be processed.")
 
 
-def get_order(order_id: int, db: Session):
-    db_order = db.query(Order).filter(Order.id == order_id).first()
-    if db_order is None:
-        raise HTTPException(status_code=404, detail="Order not found")
-    return db_order
-
-
+async def get_order(order_id: int):
+    async for session in get_db():
+        try:
+            result = await session.execute(select(Order).filter(Order.id == order_id))
+            db_order = result.scalars().first()
+            if db_order is None:
+                raise HTTPException(status_code=404, detail="Order not found")
+            return db_order
+        except SQLAlchemyError as e:
+            print(f"Database error: {e}")
+            raise HTTPException(status_code=500, detail="Database error")
